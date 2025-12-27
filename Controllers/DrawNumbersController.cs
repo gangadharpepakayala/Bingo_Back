@@ -23,23 +23,41 @@ namespace Bingo_Back.Controllers
 
         // DRAW NUMBER
         [HttpPost]
-        public IActionResult DrawNumber(Guid roomId, int number)
+        public async Task<IActionResult> DrawNumber(Guid roomId)
         {
-            using var conn = GetConnection();
-            conn.Open();
+            await using var conn = GetConnection();
+            await conn.OpenAsync();
 
-            var sql = @"
-                INSERT INTO drawn_numbers (draw_id, game_room_id, number)
-                VALUES (gen_random_uuid(), @roomId, @number);
-            ";
+            // Get already drawn numbers
+            var drawn = new HashSet<int>();
+            var getSql = "SELECT number FROM drawn_numbers WHERE game_room_id=@roomId";
+            await using (var getCmd = new NpgsqlCommand(getSql, conn))
+            {
+                getCmd.Parameters.AddWithValue("@roomId", roomId);
+                await using var reader = await getCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                    drawn.Add(reader.GetInt32(0));
+            }
 
-            using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@roomId", roomId);
-            cmd.Parameters.AddWithValue("@number", number);
-            cmd.ExecuteNonQuery();
+            if (drawn.Count == 25)
+                return BadRequest("All numbers drawn");
 
-            return Ok("Number drawn successfully");
+            var remaining = Enumerable.Range(1, 25).Where(n => !drawn.Contains(n)).ToList();
+            var rnd = new Random();
+            int number = remaining[rnd.Next(remaining.Count)];
+
+            var insertSql = @"INSERT INTO drawn_numbers
+                      (draw_id, game_room_id, number)
+                      VALUES (gen_random_uuid(), @roomId, @number)";
+
+            await using var insertCmd = new NpgsqlCommand(insertSql, conn);
+            insertCmd.Parameters.AddWithValue("@roomId", roomId);
+            insertCmd.Parameters.AddWithValue("@number", number);
+            await insertCmd.ExecuteNonQueryAsync();
+
+            return Ok(new { number });
         }
+
 
         // GET DRAWN NUMBERS
         [HttpGet("{roomId}")]
