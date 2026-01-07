@@ -1,27 +1,48 @@
 ﻿var builder = WebApplication.CreateBuilder(args);
 
-// Add services
+// 🔹 Add services
 builder.Services.AddControllers();
 
-// ✅ Add Swagger services
+// 🔹 Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-var app = builder.Build();
+// Add CORS policy
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAngular",
+        policy =>
+        {
+            policy.WithOrigins("http://localhost:4200")
+                  .AllowAnyMethod()
+                  .AllowAnyHeader()
+                  .AllowCredentials();
+        });
+});
 
-// Configure pipeline
+// Add after builder.Build()
+var app = builder.Build();
+app.UseCors("AllowAngular");
+
+
+// 🔹 Swagger middleware
 if (app.Environment.IsDevelopment())
 {
-    // ✅ Enable Swagger
     app.UseSwagger();
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Bingo API v1");
-        c.RoutePrefix = "swagger"; // /swagger
+        c.RoutePrefix = "swagger";
     });
 }
 
 app.UseHttpsRedirection();
+
+// 🔹 CORS middleware (ADD HERE)
+app.UseCors("AllowAngular");
+
 app.UseAuthorization();
+
 app.MapControllers();
+
 app.Run();

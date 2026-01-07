@@ -20,20 +20,27 @@ namespace Bingo_Back.Controllers
 
         // CREATE USER
         [HttpPost]
-        public async Task<IActionResult> CreateUser([FromBody] string username)
+        public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
         {
+            if (string.IsNullOrWhiteSpace(request.Username))
+                return BadRequest("Username is required");
+
             await using var conn = GetConnection();
             await conn.OpenAsync();
 
+            var userId = Guid.NewGuid();
             var sql = @"INSERT INTO users (user_id, username)
-                        VALUES (gen_random_uuid(), @username)";
+                VALUES (@userId, @username)";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@username", username);
+            cmd.Parameters.AddWithValue("@userId", userId);
+            cmd.Parameters.AddWithValue("@username", request.Username);
 
             await cmd.ExecuteNonQueryAsync();
-            return Ok(new { message = "User created" });
+
+            return Ok(new { id = userId, username = request.Username });
         }
+
 
         // GET USERS
         [HttpGet]

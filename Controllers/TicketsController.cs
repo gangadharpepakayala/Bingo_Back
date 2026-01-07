@@ -20,7 +20,7 @@ namespace Bingo_Back.Controllers
 
         // GENERATE TICKET (1–25 shuffled)
         [HttpPost("generate")]
-        public async Task<IActionResult> GenerateTicket(Guid playerId, Guid roomId)
+        public async Task<IActionResult> GenerateTicket([FromBody] GenerateTicketRequest request)
         {
             var numbers = Enumerable.Range(1, 25).ToArray();
             var rnd = new Random();
@@ -50,9 +50,9 @@ namespace Bingo_Back.Controllers
                         VALUES (gen_random_uuid(), @playerId, @roomId, @ticketData)";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@playerId", playerId);
-            cmd.Parameters.AddWithValue("@roomId", roomId);
-            cmd.Parameters.AddWithValue("@ticketData", ticketData);
+            cmd.Parameters.AddWithValue("@playerId", request.PlayerId);
+            cmd.Parameters.AddWithValue("@roomId", request.RoomId);
+            cmd.Parameters.Add(new NpgsqlParameter("@ticketData", NpgsqlTypes.NpgsqlDbType.Jsonb) { Value = ticketData });
 
             await cmd.ExecuteNonQueryAsync();
 
@@ -66,15 +66,21 @@ namespace Bingo_Back.Controllers
             await using var conn = GetConnection();
             await conn.OpenAsync();
 
-            var sql = @"SELECT ticket_data FROM tickets
+            var sql = @"SELECT ticket_data::text FROM tickets
                         WHERE player_id=@playerId
                         ORDER BY created_at DESC LIMIT 1";
 
             await using var cmd = new NpgsqlCommand(sql, conn);
             cmd.Parameters.AddWithValue("@playerId", playerId);
 
-            var ticket = await cmd.ExecuteScalarAsync();
-            return Ok(ticket);
+            var ticketJson = await cmd.ExecuteScalarAsync();
+            
+            if (ticketJson == null || ticketJson == DBNull.Value)
+            {
+                return NotFound("Ticket not found");
+            }
+
+            return Ok(ticketJson.ToString());
         }
     }
 }
