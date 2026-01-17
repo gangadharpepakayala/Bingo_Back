@@ -7,38 +7,38 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Add CORS policy
+// 🔹 CORS policy
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngular",
-        policy =>
-        {
-            policy.WithOrigins("http://localhost:4200")
-                  .AllowAnyMethod()
-                  .AllowAnyHeader()
-                  .AllowCredentials();
-        });
+    options.AddPolicy("AllowAngular", policy =>
+    {
+        policy
+            .WithOrigins(
+                "http://localhost:4200",
+                "https://your-frontend-domain.com" // Add Render/Vercel/Netlify frontend later
+            )
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials();
+    });
 });
 
-// Add after builder.Build()
 var app = builder.Build();
-app.UseCors("AllowAngular");
 
-
-// 🔹 Swagger middleware
-if (app.Environment.IsDevelopment())
+// 🔹 Enable Swagger in Production
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Bingo API v1");
-        c.RoutePrefix = "swagger";
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Bingo API v1");
+    c.RoutePrefix = "swagger";
+});
 
-app.UseHttpsRedirection();
+// 🔹 Middleware pipeline
+app.UseRouting();
 
-// 🔹 CORS middleware (ADD HERE)
+// ⚠️ Render handles HTTPS, so this can be removed if warning bothers you
+// app.UseHttpsRedirection();
+
 app.UseCors("AllowAngular");
 
 app.UseAuthorization();
