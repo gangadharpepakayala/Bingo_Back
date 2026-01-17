@@ -15,7 +15,7 @@ builder.Services.AddCors(options =>
         policy
             .WithOrigins(
                 "http://localhost:4200",
-                "https://your-frontend-domain.com" // Add Render/Vercel/Netlify frontend later
+                "https://bingoappbyrock.netlify.app" // Add Render/Vercel/Netlify frontend later
             )
             .AllowAnyMethod()
             .AllowAnyHeader()
