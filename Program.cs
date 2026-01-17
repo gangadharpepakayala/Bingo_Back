@@ -32,7 +32,7 @@ app.UseSwaggerUI(c =>
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Bingo API v1");
     c.RoutePrefix = "swagger";
 });
-
+app.UseStaticFiles();  
 // 🔹 Middleware pipeline
 app.UseRouting();
 
