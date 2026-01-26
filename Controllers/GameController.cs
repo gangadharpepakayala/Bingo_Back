@@ -59,9 +59,11 @@ namespace Bingo_Back.Controllers
                 }
             }
 
-            // 3. Check for winner
+            // 3. Check for winner(s)
             Console.WriteLine($"[CheckWinner] Checking {tickets.Count} tickets against {drawn.Count} drawn numbers.");
             
+            var winners = new List<Guid>();
+
             foreach (var (playerId, ticket) in tickets)
             {
                 int lines = CountCompletedLines(ticket, drawn);
@@ -69,21 +71,48 @@ namespace Bingo_Back.Controllers
 
                 if (lines >= 5)
                 {
-                    // Update room status
-                    // REUSE current_turn_player_id to store the winner ID when status is 'completed'
+                    winners.Add(playerId);
+                }
+            }
+
+            if (winners.Count > 0)
+            {
+                // If more than one winner, it's a DRAW
+                if (winners.Count > 1)
+                {
                     var updateSql = @"UPDATE game_rooms 
-                                      SET status='completed', current_turn_player_id=@winnerId 
+                                      SET status='completed', current_turn_player_id=NULL 
                                       WHERE game_room_id=@roomId";
                     
                     await using var updateCmd = new NpgsqlCommand(updateSql, conn);
-                    updateCmd.Parameters.AddWithValue("@winnerId", playerId);
                     updateCmd.Parameters.AddWithValue("@roomId", request.RoomId);
                     await updateCmd.ExecuteNonQueryAsync();
 
                     return Ok(new
                     {
                         winner = true,
-                        playerId = playerId
+                        isDraw = true,
+                        winnerName = "Draw"
+                    });
+                }
+                else
+                {
+                    // Single Winner
+                    var winnerId = winners[0];
+                    var updateSql = @"UPDATE game_rooms 
+                                      SET status='completed', current_turn_player_id=@winnerId 
+                                      WHERE game_room_id=@roomId";
+                    
+                    await using var updateCmd = new NpgsqlCommand(updateSql, conn);
+                    updateCmd.Parameters.AddWithValue("@winnerId", winnerId);
+                    updateCmd.Parameters.AddWithValue("@roomId", request.RoomId);
+                    await updateCmd.ExecuteNonQueryAsync();
+
+                    return Ok(new
+                    {
+                        winner = true,
+                        playerId = winnerId,
+                        isDraw = false
                     });
                 }
             }
@@ -101,25 +130,59 @@ namespace Bingo_Back.Controllers
             await using var conn = GetConnection();
             await conn.OpenAsync();
 
-            var sql = @"
-                SELECT p.player_id, u.username 
-                FROM game_rooms g
-                JOIN players p ON g.current_turn_player_id = p.player_id
-                JOIN users u ON p.user_id = u.user_id
-                WHERE g.game_room_id = @roomId AND g.status = 'completed'";
+            var checkSql = "SELECT status, current_turn_player_id FROM game_rooms WHERE game_room_id = @roomId";
+            string status = "";
+            Guid? winnerId = null;
 
-            await using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@roomId", roomId);
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-            if (await reader.ReadAsync())
+            await using (var cmd = new NpgsqlCommand(checkSql, conn))
             {
-                return Ok(new
+                cmd.Parameters.AddWithValue("@roomId", roomId);
+                await using var reader = await cmd.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
                 {
-                    winner = true,
-                    playerId = reader.GetGuid(0),
-                    winnerName = reader.GetString(1)
-                });
+                    status = reader.IsDBNull(0) ? "" : reader.GetString(0);
+                    if (!reader.IsDBNull(1)) winnerId = reader.GetGuid(1);
+                }
+            }
+
+            if (status == "completed")
+            {
+                if (winnerId == null)
+                {
+                    // DRAW
+                    return Ok(new
+                    {
+                        winner = true,
+                        isDraw = true,
+                        playerId = Guid.Empty,
+                        winnerName = "Draw"
+                    });
+                }
+                else
+                {
+                    // Single Winner - Get Name
+                    var sql = @"
+                        SELECT u.username 
+                        FROM players p 
+                        JOIN users u ON p.user_id = u.user_id
+                        WHERE p.player_id = @pid";
+                    
+                    var username = "";
+                    await using (var cmd = new NpgsqlCommand(sql, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@pid", winnerId);
+                        var res = await cmd.ExecuteScalarAsync();
+                        if (res != null) username = res.ToString();
+                    }
+
+                    return Ok(new
+                    {
+                        winner = true,
+                        playerId = winnerId,
+                        winnerName = username,
+                        isDraw = false
+                    });
+                }
             }
 
             return Ok(new { winner = false });
