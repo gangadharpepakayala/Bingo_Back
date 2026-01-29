@@ -92,6 +92,7 @@ namespace Bingo_Back.Controllers
                     {
                         winner = true,
                         isDraw = true,
+                        playerId = Guid.Empty,
                         winnerName = "Draw"
                     });
                 }
@@ -186,6 +187,132 @@ namespace Bingo_Back.Controllers
             }
 
             return Ok(new { winner = false });
+        }
+
+        [HttpPost("restart")]
+        public async Task<IActionResult> RestartGame([FromBody] DrawRequest request)
+        {
+            await using var conn = GetConnection();
+            await conn.OpenAsync();
+
+            // Start a transaction to ensure all operations complete together
+            await using var transaction = await conn.BeginTransactionAsync();
+            try
+            {
+                // 1. Verify room exists and get players
+                var roomCheckSql = "SELECT status FROM game_rooms WHERE game_room_id = @roomId";
+                string roomStatus = "";
+                
+                await using (var checkCmd = new NpgsqlCommand(roomCheckSql, conn, transaction))
+                {
+                    checkCmd.Parameters.AddWithValue("@roomId", request.RoomId);
+                    var result = await checkCmd.ExecuteScalarAsync();
+                    if (result == null)
+                    {
+                        await transaction.RollbackAsync();
+                        return NotFound("Room not found");
+                    }
+                    roomStatus = result.ToString();
+                }
+
+                // 2. Get all players in the room
+                var playersSql = "SELECT player_id FROM players WHERE game_room_id = @roomId";
+                var playerIds = new List<Guid>();
+                
+                await using (var playersCmd = new NpgsqlCommand(playersSql, conn, transaction))
+                {
+                    playersCmd.Parameters.AddWithValue("@roomId", request.RoomId);
+                    await using var reader = await playersCmd.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
+                    {
+                        playerIds.Add(reader.GetGuid(0));
+                    }
+                }
+
+                if (playerIds.Count == 0)
+                {
+                    await transaction.RollbackAsync();
+                    return BadRequest("No players found in room");
+                }
+
+                // 3. Delete all drawn numbers for this room
+                var deleteDrawnSql = "DELETE FROM drawn_numbers WHERE game_room_id = @roomId";
+                await using (var deleteDrawnCmd = new NpgsqlCommand(deleteDrawnSql, conn, transaction))
+                {
+                    deleteDrawnCmd.Parameters.AddWithValue("@roomId", request.RoomId);
+                    await deleteDrawnCmd.ExecuteNonQueryAsync();
+                }
+
+                // 4. Delete all existing tickets for this room
+                var deleteTicketsSql = "DELETE FROM tickets WHERE game_room_id = @roomId";
+                await using (var deleteTicketsCmd = new NpgsqlCommand(deleteTicketsSql, conn, transaction))
+                {
+                    deleteTicketsCmd.Parameters.AddWithValue("@roomId", request.RoomId);
+                    await deleteTicketsCmd.ExecuteNonQueryAsync();
+                }
+
+                // 5. Generate new tickets for all players
+                var rnd = new Random();
+                foreach (var playerId in playerIds)
+                {
+                    // Generate new ticket (1-25 shuffled)
+                    var numbers = Enumerable.Range(1, 25).ToArray();
+                    for (int i = numbers.Length - 1; i > 0; i--)
+                    {
+                        int j = rnd.Next(i + 1);
+                        (numbers[i], numbers[j]) = (numbers[j], numbers[i]);
+                    }
+
+                    var ticket = new int[][]
+                    {
+                        numbers[0..5],
+                        numbers[5..10],
+                        numbers[10..15],
+                        numbers[15..20],
+                        numbers[20..25]
+                    };
+
+                    var ticketData = JsonSerializer.Serialize(ticket);
+
+                    var insertTicketSql = @"INSERT INTO tickets 
+                                          (ticket_id, player_id, game_room_id, ticket_data)
+                                          VALUES (gen_random_uuid(), @playerId, @roomId, @ticketData)";
+
+                    await using var insertTicketCmd = new NpgsqlCommand(insertTicketSql, conn, transaction);
+                    insertTicketCmd.Parameters.AddWithValue("@playerId", playerId);
+                    insertTicketCmd.Parameters.AddWithValue("@roomId", request.RoomId);
+                    insertTicketCmd.Parameters.Add(new NpgsqlParameter("@ticketData", NpgsqlTypes.NpgsqlDbType.Jsonb) { Value = ticketData });
+                    await insertTicketCmd.ExecuteNonQueryAsync();
+                }
+
+                // 6. Reset game room status to active and set first player's turn
+                var updateRoomSql = @"UPDATE game_rooms 
+                                    SET status = 'active', 
+                                        current_turn_player_id = @firstPlayerId 
+                                    WHERE game_room_id = @roomId";
+
+                await using (var updateRoomCmd = new NpgsqlCommand(updateRoomSql, conn, transaction))
+                {
+                    updateRoomCmd.Parameters.AddWithValue("@firstPlayerId", playerIds[0]);
+                    updateRoomCmd.Parameters.AddWithValue("@roomId", request.RoomId);
+                    await updateRoomCmd.ExecuteNonQueryAsync();
+                }
+
+                await transaction.CommitAsync();
+
+                return Ok(new 
+                { 
+                    message = "Game restarted successfully",
+                    roomId = request.RoomId,
+                    playerCount = playerIds.Count
+                });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                Console.WriteLine($"[RestartGame] Error: {ex.Message}");
+                return StatusCode(500, $"Error restarting game: {ex.Message}");
+            }
         }
 
         private int CountCompletedLines(int[][] t, HashSet<int> d)
